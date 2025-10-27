@@ -5,12 +5,13 @@ This document provides an overview of different computer vision techniques used 
 
 ## Summary of how these techniques are applied in image processing:
 
-| **Task**               | **Objective**                               | **Networks Used**               | **Use Cases**                                    |
-|------------------------|---------------------------------------------|---------------------------------|--------------------------------------------------|
-| **Image Classification**| Assign a label to the entire image          | Traditional CNNs (LeNet, AlexNet) | Medical diagnosis, object classification in photos |
-| **Object Detection**    | Locate objects and classify them            | R-CNN, YOLO, Faster R-CNN        | Autonomous vehicles, security cameras            |
-| **Image Segmentation**  | Assign labels to each pixel                 | FCN, U-Net                       | Medical images, agriculture, autonomous vehicles |
-| **Image Generation**    | Create realistic or transformed images      | GANs, VAEs                       | Generative art, deepfakes, text-to-image generation |
+| **Task**                 | **Objective**                                        | **Networks Used**                            | **Use Cases**                                                 |
+| ------------------------ | ---------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| **Image Classification** | Assign a label to the entire image                   | Traditional CNNs (LeNet, AlexNet)            | Medical diagnosis, object classification in photos            |
+| **Object Detection**     | Locate and classify multiple objects within an image | R-CNN, YOLO (v1–v9), Faster/Mask R-CNN, DETR | Autonomous vehicles, surveillance, retail analytics, robotics |
+| **Image Segmentation**   | Assign labels to each pixel                          | FCN, U-Net, DeepLab                          | Medical imaging, agriculture, autonomous vehicles             |
+| **Image Generation**     | Create realistic or transformed images               | GANs, VAEs, Diffusion Models                 | Generative art, deepfakes, text-to-image generation           |
+| **Pose Estimation**      | Detect keypoints or skeletons of humans/objects      | OpenPose, HRNet, PoseNet, MediaPipe                     | Sports analytics, motion capture, AR/VR applications          |
 
 ## Examples of Object Detection
 Here are a couple of examples of object detection applications:
