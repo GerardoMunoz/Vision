@@ -2,10 +2,9 @@
 
 
 # 🧮 Image Manipulation & Display Libraries: Comparison Table
-
-Example with OpenCV.js 
 * https://gerardomunoz.github.io/Vision/image_manipulation/Image_colors.html
 * https://gerardomunoz.github.io/Vision/image_manipulation/Lucas–Kanade.html
+* https://colab.research.google.com/github/GerardoMunoz/Vision/blob/main/image_manipulation/chopsiticks.ipynb
 
 ## Overview Table
 
