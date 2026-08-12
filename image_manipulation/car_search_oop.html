@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Car Vision OOP PubSub</title>
+    <style>
+        body {
+            margin: 0;
+            background: #111;
+            color: white;
+        }
+
+        #container {
+            display: flex;
+        }
+
+        canvas {
+            background: #222;
+            margin: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="container">
+        <canvas id="world" width="600" height="600"></canvas>
+        <canvas id="camera" width="300" height="300"></canvas>
+    </div>
+    <div id="debug">debug</div>
+    <div id="state">state</div>
+    <div id="angle">angle</div>
+    <div id="texto">texto</div>
+    <script>
+        let cx = 300, cy = 300, r = 200;
+        // ================= PUBSUB =================
+        class PubSub {
+            constructor() { this.subs = {}; }
+            subscribe(topic, cb) {
+                if (!this.subs[topic]) this.subs[topic] = [];
+                this.subs[topic].push(cb);
+            }
+            publish(topic, data) {
+                (this.subs[topic] || []).forEach(cb => cb(data));
+            }
+        }
+        const bus = new PubSub();
+
+        // ================= CONFIG =================
+        const world = document.getElementById("world");
+        const wctx = world.getContext("2d");
+
+        const camCanvas = document.getElementById("camera");
+        const cctx = camCanvas.getContext("2d");
+
+        const FOV = Math.PI / 4;
+
+        // Flags (your configuration)
+        const flags = [
+            { x: 275, y: 300, color: "blue" },
+            { x: 325, y: 300, color: "green" },
+            { x: 300, y: 250, color: "red" }
+        ];
+
+        // ================= UTILS =================
+        function normalize(a) {
+            while (a > Math.PI) a -= 2 * Math.PI;
+            while (a < -Math.PI) a += 2 * Math.PI;
+            return a;
+        }
+
+        function randomInCircle(cx, cy, r) {
+            let a = Math.random() * Math.PI * 2;
+            return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,angle: Math.random() * Math.PI * 2 };
+        }
+
+        // ================= CAR =================
+        // class Car {
+        //     constructor(bus,start) {
+
+        //         this.x = start.x;
+        //         this.y = start.y;
+        //         this.angle = Math.random() * Math.PI * 2;
+        //         this.speed = 1.5;
+
+        //         this.twist = { linear: 0, angular: 0 };
+
+        //         bus.subscribe("car/twist", (t) => this.twist = t);
+        //     }
+
+        //     update() {
+        //         this.angle += this.twist.angular * 0.05;
+
+        //         this.x += Math.cos(this.angle) * this.twist.linear * this.speed;
+        //         this.y += Math.sin(this.angle) * this.twist.linear * this.speed;
+        //     }
+        // }
+
+        class Car {
+            constructor(bus, start) {
+                this.x = start.x;
+                this.y = start.y;
+                this.angle = start.angle;
+
+                // Now twist is REAL velocity
+                this.twist = { linear: 0, angular: 0 };
+
+                this.lastTime = performance.now() / 1000;
+
+                bus.subscribe("car/twist", (t) => this.twist = t);
+            }
+
+            update() {
+                let now = performance.now() / 1000;
+                let dt1 = now - this.lastTime;
+                this.lastTime = now;
+
+                // angular in rad/s
+                this.angle += this.twist.angular * dt1;
+
+                // linear in px/s
+                this.x += Math.cos(this.angle) * this.twist.linear * dt1;
+                this.y += Math.sin(this.angle) * this.twist.linear * dt1;
+            }
+        }
+
+
+        // ================= CAMERA =================
+        class Camera {
+            constructor(bus, car, flags) {
+                this.bus = bus;
+                this.car = car;
+                this.flags = flags;
+
+                bus.subscribe("camera/request", this.capture.bind(this));
+            }
+
+
+            update() {
+                let visibles = [];
+
+                this.flags.forEach(f => {
+                    let dx = f.x - this.car.x;
+                    let dy = f.y - this.car.y;
+
+                    let angle = Math.atan2(dy, dx);
+                    let rel = normalize(angle - this.car.angle);
+
+                    if (Math.abs(rel) < FOV / 2) {
+                        visibles.push({
+                            ...f,
+                            relAngle: rel,
+                            screenX: (rel / (FOV / 2)) * (camCanvas.width / 2) + camCanvas.width / 2
+                        });
+                    }
+                });
+
+                visibles.sort((a, b) => a.screenX - b.screenX);
+
+                this.bus.publish("camera/visibles", visibles);
+            }
+
+            capture() {
+                let visibles = [];
+
+                this.flags.forEach(f => {
+                    let dx = f.x - this.car.x;
+                    let dy = f.y - this.car.y;
+
+                    let angle = Math.atan2(dy, dx);
+                    let rel = normalize(angle - this.car.angle);
+
+                    if (Math.abs(rel) < FOV / 2) {
+                        visibles.push({
+                            ...f,
+                            relAngle: rel,
+                            screenX: (rel / (FOV / 2)) * (camCanvas.width / 2) + camCanvas.width / 2
+                        });
+                    }
+                });
+
+                visibles.sort((a, b) => a.screenX - b.screenX);
+
+                this.bus.publish("camera/visibles", visibles);
+            }
+
+
+        }
+
+
+        // ================= CONTROLLER =================
+        class Controller {
+            constructor(bus) {
+                this.bus = bus;
+                //this.twist = { linear: 0, angular: 0 };
+                //this.angle = 
+                this.car_virtual = new Car(bus, { x: 100, y: 100, angle: 0 });
+                // this.estimatedPos = {
+                //     x: 300,
+                //     y: 300
+                // }
+
+                this.state = "SEARCH"; // SEARCH | APPROACH_RED | MOVE_TARGET | DONE
+
+                this.prevRedSize = 0;
+                this.stableCount = 0;
+
+                bus.subscribe("camera/visibles", (v) => this.onFrame(v));
+                //bus.subscribe("car/twist", (t) => this.twist = t);
+            }
+
+            step() {
+                // Request frame only when needed
+                if (this.state !== "DONE") {
+                    this.bus.publish("camera/request");
+                }
+            }
+
+            onFrame(v) {
+                let now = performance.now() / 1000; // seconds
+                if (!this.startTime) this.startTime = now;
+
+                let dt = now - this.startTime;
+                //console.log('dt',dt)
+
+                document.getElementById("state").textContent = this.state + ' ' + v.length;
+                // ===== 1. SEARCH: rotate until see 3 colors =====
+                if (this.state === "SEARCH") {
+                    if (v.length < 3) {
+                        this.bus.publish("car/twist", { angular: 0.8, linear: 0 });
+                        return;
+                    }
+                    let left = v[0];
+                    let center = v[1];
+                    let right = v[2];
+
+                    let dl = Math.abs(center.screenX - left.screenX);
+                    let dr = Math.abs(right.screenX - center.screenX);
+
+                    // ===== STEP 1: DETERMINE ZONE =====
+                    let order = left.color + "-" + center.color + "-" + right.color;
+
+
+                    let zoneMap = {
+                        "green-blue-red": [0, 1],
+                        "green-red-blue": [1, -1],
+                        "red-green-blue": [2, 1],
+                        "red-blue-green": [3, -1],
+                        "blue-red-green": [4, 1],
+                        "blue-green-red": [5, -1]
+                    };
+
+                    let zone = zoneMap[order][0];
+                    let zone_sig = zoneMap[order][1];
+
+                    if (zone === undefined) return;
+
+                    // ===== STEP 2: COMPUTE ANGLE =====
+                    let ratio = zone_sig == 1 ? dl / (dl + dr) : dr / (dl + dr); // [0,1]
+
+                    let angleDeg = (zone + ratio) * 60;
+                    let angleRad = angleDeg * Math.PI / 180;
+                    // ===== ESTIMATED POSITION ON CIRCLE =====
+                    //let cx = 300, cy = 300, r = 200;
+
+                    // this.estimatedPos = {
+                    //     x: cx + Math.cos(angleRad) * r,
+                    //     y: cy - Math.sin(angleRad) * r
+                    // };
+                    this.car_virtual.x = cx + Math.cos(angleRad) * r
+                    this.car_virtual.y = cy - Math.sin(angleRad) * r
+                    this.car_virtual.angle = Math.PI - angleRad//(angleRad-Math.PI)%(Math.PI*2)
+
+                    document.getElementById("texto").textContent = angleRad + ' ' + angleDeg// order + ' ' + zone + ' ' + ratio + ' ' + angleDeg + ' ' + Math.cos(angleRad) + ' ' + Math.sin(angleRad);
+
+                    if (zone == 1 || zone == 4) {
+                        console.log('zone1 OR zone4', this.targetDistance, this.car_virtual.x, this.car_virtual.y);
+                        this.state = "APPROACH_RED";
+                        this.targetDistanceRed = 100
+                        // this.prevRedSize = 0;
+                        // this.stableCount = 0;
+                        this.startTime = now
+                        return;
+                    }
+                    if (zone == 0) {
+                        this.state = "ROTATE1";
+                        this.startTime = null;
+
+                        this.targetAngle1 = Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistance = 2 * r * Math.sin(Math.PI / 4-angleRad / 2 ) ;
+                        this.targetAngle2 = 5 * Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistanceRed = 100
+                        console.log('zone', zone, this.targetDistance, this.car_virtual.x, this.car_virtual.y);//angleRad/Math.PI*180,this.targetAngle1,this.targetAngle1/Math.PI*180)
+
+                        this.angularSpeed = .5; // rad/s
+                        this.linearSpeed = 100;   // px/s
+
+                        //this.accumulated = 0;
+                        this.startTime = now;
+                        return;
+                    }
+                    if (zone == 2) {
+                        this.state = "ROTATE1";
+                        this.startTime = null;
+
+                        this.targetAngle1 = 5 * Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistance = 2 * r * Math.sin(angleRad / 2 - Math.PI / 4);
+                        this.targetAngle2 =  Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistanceRed = 100
+                        console.log('zone', zone, angleRad, this.targetDistance, this.car_virtual.x, this.car_virtual.y);//angleRad/Math.PI*180,this.targetAngle1,this.targetAngle1/Math.PI*180)
+
+                        this.angularSpeed = .5; // rad/s
+                        this.linearSpeed = 100;   // px/s
+
+                        //this.accumulated = 0;
+                        this.startTime = now;
+                        return;
+                    }
+                    if (zone == 3) {
+                        this.state = "ROTATE1";
+                        this.startTime = null;
+
+                        this.targetAngle1 = angleRad / 2 - Math.PI / 4; // example
+                        this.targetDistance = 2 * r * Math.sin(3 * Math.PI / 4 - angleRad / 2);
+                        this.targetAngle2 = 3 * Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistanceRed = 100
+                        console.log('zone', zone, angleRad, this.targetDistance, this.targetAngle1, this.car_virtual.x, this.car_virtual.y);//angleRad/Math.PI*180,this.targetAngle1,this.targetAngle1/Math.PI*180)
+
+                        this.angularSpeed = .5; // rad/s
+                        this.linearSpeed = 100;   // px/s
+
+                        //this.accumulated = 0;
+                        this.startTime = now;
+                        return;
+                    }
+                    if (zone == 5) {
+                        this.state = "ROTATE1";
+                        this.startTime = null;
+
+                        this.targetAngle1 = 3 * Math.PI / 4 + angleRad / 2; // example
+                        this.targetDistance = 2 * r * Math.sin(angleRad / 2 - 3 * Math.PI / 4);
+                        this.targetAngle2 = angleRad / 2 -  Math.PI / 4;//5*Math.PI/4+; // example
+                        this.targetDistanceRed = 100
+                        console.log('zone', zone, this.targetDistance, this.car_virtual.x, this.car_virtual.y, this.targetAngle2);//angleRad/Math.PI*180,this.targetAngle1,this.targetAngle1/Math.PI*180)
+
+                        this.angularSpeed = .5; // rad/s
+                        this.linearSpeed = 100;   // px/s
+
+                        //this.accumulated = 0;
+                        this.startTime = now;
+                        return;
+                    }
+                }
+
+
+
+                // ===== ROTATE 1 =====
+                if (this.state === "ROTATE1") {
+
+                    let rotated1 = dt * this.angularSpeed;
+                    //document.getElementById("debug").textContent =rotated1+' '+this.targetAngle1+' '+dt+' '+ this.angularSpeed
+                    if (rotated1 < this.targetAngle1) {
+                        this.bus.publish("car/twist", { angular: this.angularSpeed, linear: 0 });
+                    } else {
+                        this.state = "MOVE";
+                        this.startTime = now;
+                        return;
+                    }
+                }
+
+                // ===== MOVE =====
+                if (this.state === "MOVE") {
+
+                    let moved = dt * this.linearSpeed;
+                    document.getElementById("debug").textContent = this.targetDistance + ' ' + moved + ' ' + this.car_virtual.x + ' ' + this.car_virtual.y
+                    if (moved < this.targetDistance) {
+                        this.bus.publish("car/twist", { angular: 0, linear: this.linearSpeed });
+                    } else {
+                        this.state = "ROTATE2";
+                        this.startTime = now;
+                        console.log('MOVE', now, this.startTime)
+                        return;
+
+                    }
+                }
+
+                // ===== ROTATE 2 =====
+                if (this.state === "ROTATE2") {
+
+                    let rotated2 = dt * this.angularSpeed;
+                    //console.log('ROTATE2',rotated2 , this.targetAngle2, dt , this.angularSpeed,now , this.startTime)
+
+                    if (rotated2 < this.targetAngle2) {
+                        this.bus.publish("car/twist", { angular: this.angularSpeed, linear: 0 });
+                    } else {
+                        this.state = "APPROACH_RED";
+                        this.bus.publish("car/twist", { angular: 0, linear: 0 });
+                        this.startTime = now;
+                        return;
+                    }
+                }
+
+
+
+                //     this.state = "DECIDE";
+                // }
+
+                // // ===== 2. DECIDE =====
+                // if (this.state === "DECIDE") {
+
+                //     let center = this.getCenterFlag(v);
+
+                //     if (center && center.color === "red") {
+                //         this.state = "APPROACH_RED";
+                //         this.prevRedSize = 0;
+                //         this.stableCount = 0;
+                //     } else {
+                //         this.state = "MOVE_TARGET";
+                //     }
+
+
+                // ===== 3. APPROACH RED =====
+                if (this.state === "APPROACH_RED") {
+                    //console.log('APPROACH_RED',now , this.startTime)
+
+
+
+                    let moved = dt * this.linearSpeed;
+                    
+                    document.getElementById("debug").textContent = this.targetDistanceRed + ' ' + moved + ' ' + dt + ' ' + this.linearSpeed + ' ' + this.car_virtual.x + ' ' + this.car_virtual.y
+                    if (moved < this.targetDistanceRed) {
+                        this.bus.publish("car/twist", { angular: 0, linear: this.linearSpeed });
+                    } else {
+                        this.state = "DONE";
+                        this.bus.publish("car/twist", { angular: 0, linear: 0 });
+                        this.startTime = now;
+                        console.log('APPROACH_RED', now, this.startTime)
+                        return;
+
+                    }
+
+
+
+                    // let red = v.find(f => f.color === "red");
+                    // if (!red) {
+                    //     this.state = "SEARCH";
+                    //     return;
+                    // }
+
+                    // let size = this.estimateSize(red);
+
+                    // // Move forward
+                    // this.bus.publish("car/twist", { angular: 0, linear: this.linearSpeed });
+
+                    // // Check if growing
+                    // if (size >= this.prevRedSize) {
+                    //     this.stableCount++;
+                    // } else {
+                    //     this.stableCount = 0;
+                    // }
+
+                    // this.prevRedSize = size;
+
+                    // // If stable (not increasing anymore) → stop
+                    // if (this.stableCount > 5) {
+                    //     this.bus.publish("car/twist", { angular: 0, linear: 0 });
+                    //     this.state = "DONE";
+                    //     return;
+                    // }
+                }
+
+                // ===== 4. MOVE TO (300,200) =====
+                // if (this.state === "MOVE_TARGET") {
+
+                //     // We DO NOT use real position → use direction from vision
+
+                //     let center = this.getCenterFlag(v);
+
+                //     if (!center) {
+                //         this.state = "SEARCH";
+                //         return;
+                //     }
+
+                //     // Simple steering: keep center flag aligned
+                //     let error = center.screenX - 150;
+
+                //     if (Math.abs(error) > 50) {
+                //         this.bus.publish("car/twist", {
+                //             angular: -error * 0.005,
+                //             linear: 0
+                //         });
+                //     } else {
+                //         this.bus.publish("car/twist", {
+                //             angular: 0,
+                //             linear: 1
+                //         });
+                //     }
+
+                //     // OPTIONAL: stop condition (very simple)
+                //     // you could replace this with exact estimation if you want
+                // }
+
+
+            }
+
+            // ===== HELPERS =====
+
+            getCenterFlag(v) {
+                if (v.length === 0) return null;
+
+                return v.reduce((best, f) => {
+                    return Math.abs(f.screenX - 150) < Math.abs(best.screenX - 150)
+                        ? f : best;
+                });
+            }
+
+            estimateSize(flag) {
+                // Simple proxy: closer to center + larger spread ≈ bigger
+                return 1 / (Math.abs(flag.relAngle) + 0.01);
+            }
+
+            // update() {
+            //     this.angle += this.twist.angular * 0.05;
+
+            //     this.estimatedPos.x += 0//Math.cos(this.angle) * this.twist.linear * this.speed;
+            //     this.estimatedPos.y += 0//Math.sin(this.angle) * this.twist.linear * this.speed;
+            // }
+        }
+        // ================= DRAW =================
+        let controller;
+
+        function drawWorld() {
+            wctx.clearRect(0, 0, 600, 600);
+
+            // Circle
+            wctx.strokeStyle = "gray";
+            wctx.beginPath();
+            wctx.arc(300, 300, 200, 0, Math.PI * 2);
+            wctx.stroke();
+
+            // Flags
+            flags.forEach(f => {
+                wctx.fillStyle = f.color;
+                wctx.beginPath();
+                wctx.arc(f.x, f.y, 10, 0, Math.PI * 2);
+                wctx.fill();
+            });
+
+            // Estimated position
+            //if (controller.estimatedPos) {
+            wctx.fillStyle = "white";
+            wctx.beginPath();
+            wctx.arc(controller.car_virtual.x, controller.car_virtual.y, 6, 0, Math.PI * 2);
+            wctx.fill();
+
+            // Direction
+            wctx.strokeStyle = "white";
+            wctx.beginPath();
+            wctx.moveTo(controller.car_virtual.x, controller.car_virtual.y);
+            wctx.lineTo(
+                controller.car_virtual.x + Math.cos(controller.car_virtual.angle) * 30,
+                controller.car_virtual.y + Math.sin(controller.car_virtual.angle) * 30
+            );
+            wctx.stroke();
+
+            // wctx.strokeStyle = "white";
+            // wctx.beginPath();
+            // wctx.moveTo(controller.car_virtual.x, controller.car_virtual.y);
+            // wctx.lineTo(300, 100);
+            // wctx.stroke();
+
+
+            //}
+
+            // Car
+            wctx.fillStyle = "yellow";
+            wctx.beginPath();
+            wctx.arc(car_real.x, car_real.y, 8, 0, Math.PI * 2);
+            wctx.fill();
+
+            // Direction
+            wctx.strokeStyle = "yellow";
+            wctx.beginPath();
+            wctx.moveTo(car_real.x, car_real.y);
+            wctx.lineTo(
+                car_real.x + Math.cos(car_real.angle) * 30,
+                car_real.y + Math.sin(car_real.angle) * 30
+            );
+            wctx.stroke();
+
+        }
+
+        function drawCamera() {
+            cctx.clearRect(0, 0, 300, 300);
+
+            bus.publish("camera/request_draw", null);
+        }
+
+        // Draw from last frame
+        bus.subscribe("camera/visibles", (v) => {
+            cctx.clearRect(0, 0, 300, 300);
+
+            v.forEach(f => {
+                cctx.fillStyle = f.color;
+                cctx.beginPath();
+                cctx.arc(f.screenX, 150, 10, 0, Math.PI * 2);
+                cctx.fill();
+            });
+
+            cctx.strokeStyle = "white";
+            cctx.beginPath();
+            cctx.moveTo(150, 0);
+            cctx.lineTo(150, 300);
+            cctx.stroke();
+        });
+
+        // ================= INIT =================
+        let start = randomInCircle(300, 300, 200);
+        //a = -9 * Math.PI / 6
+        //let start = { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, angle: Math.random() * Math.PI * 2 }
+        const car_real = new Car(bus, start);
+        //const car_virtual = new Car(bus,{x:100,y:100});
+        const camera = new Camera(bus, car_real, flags);
+        controller = new Controller(bus);
+
+        // ================= LOOP =================
+        let t = 0
+        function loop() {
+            camera.update(t);
+            car_real.update(t);
+            controller.car_virtual.update()
+            drawWorld(t);
+            requestAnimationFrame(loop);
+            t += 1
+        }
+
+        loop();
+    </script>
+
+</body>
+
+</html>
