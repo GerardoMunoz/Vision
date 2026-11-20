@@ -35,16 +35,32 @@ label{display:block;font-size:.87rem;margin:8px 0}input[type=range]{width:100%}
 <div class="marker">
 <h3><span class="swatch" id="sw1"></span> Marker 1</h3>
 <button id="pick1">Calibrate marker 1</button><div class="readout" id="r1">Not calibrated</div>
-<label>Color tolerance: <output id="t1o">24</output><input id="t1" type="range" min="5" max="65" value="24"></label>
+<strong>HSV limits</strong>
+<div class="hsv-grid">
+  <label>H min<input id="h1min" type="number" min="0" max="360" value="0"></label>
+  <label>H max<input id="h1max" type="number" min="0" max="360" value="360"></label>
+  <label>S min<input id="s1min" type="number" min="0" max="255" value="0"></label>
+  <label>S max<input id="s1max" type="number" min="0" max="255" value="255"></label>
+  <label>V min<input id="v1min" type="number" min="0" max="255" value="0"></label>
+  <label>V max<input id="v1max" type="number" min="0" max="255" value="255"></label>
+</div>
 <label>Minimum area: <output id="a1o">35</output> pixels<input id="a1" type="range" min="5" max="1500" value="35"></label>
 </div>
 <div class="marker">
 <h3><span class="swatch" id="sw2"></span> Marker 2</h3>
 <button id="pick2">Calibrate marker 2</button><div class="readout" id="r2">Not calibrated</div>
-<label>Color tolerance: <output id="t2o">24</output><input id="t2" type="range" min="5" max="65" value="24"></label>
+<strong>HSV limits</strong>
+<div class="hsv-grid">
+  <label>H min<input id="h2min" type="number" min="0" max="360" value="0"></label>
+  <label>H max<input id="h2max" type="number" min="0" max="360" value="360"></label>
+  <label>S min<input id="s2min" type="number" min="0" max="255" value="0"></label>
+  <label>S max<input id="s2max" type="number" min="0" max="255" value="255"></label>
+  <label>V min<input id="v2min" type="number" min="0" max="255" value="0"></label>
+  <label>V max<input id="v2max" type="number" min="0" max="255" value="255"></label>
+</div>
 <label>Minimum area: <output id="a2o">35</output> pixels<input id="a2" type="range" min="5" max="1500" value="35"></label>
 </div>
-<p class="muted">The program thresholds color in HSV, groups neighboring pixels (connected components), and draws a circle around each detected blob. The cross marks its centroid.</p>
+<p class="muted">Each marker has editable minimum and maximum H, S and V values. Pixels inside those limits are grouped into blobs; the cross marks each blob centroid.</p>
 <button id="clear">Clear calibration</button>
 </section></div>
 <video id="video" autoplay playsinline muted hidden></video>
@@ -68,6 +84,18 @@ function sample(x,y,i){
  for(let k=0;k<d.length;k+=4){r+=d[k];g+=d[k+1];b+=d[k+2];n++;}
  const rgb=[Math.round(r/n),Math.round(g/n),Math.round(b/n)], v=hsv(...rgb);
  Object.assign(markers[i],{rgb,h:v[0],s:v[1],v:v[2]});
+
+ // Seed editable HSV limits around the sampled color.
+ // Hue is circular; min > max is allowed to represent a range crossing 0 degrees.
+ const k=i+1;
+ const set=(axis,side,value)=>{document.querySelector(`#${axis}${k}${side}`).value=Math.round(value);};
+ set('h','min',(v[0]-12+360)%360);
+ set('h','max',(v[0]+12)%360);
+ set('s','min',Math.max(0,v[1]-55));
+ set('s','max',Math.min(255,v[1]+55));
+ set('v','min',Math.max(0,v[2]-55));
+ set('v','max',Math.min(255,v[2]+55));
+
  document.querySelector('#sw'+(i+1)).style.background=`rgb(${rgb})`;
  document.querySelector('#r'+(i+1)).textContent=`RGB ${rgb.join(', ')} | HSV ${v.map(x=>x.toFixed(0)).join(', ')}`;
  status.textContent=`Marker ${i+1} calibrated`;
@@ -92,11 +120,17 @@ function components(mask,minArea){
 }
 function detect(img,m,i){
  if(!m.rgb)return [];
- const tol=+document.querySelector('#t'+(i+1)).value, minArea=+document.querySelector('#a'+(i+1)).value;
+ const k=i+1, minArea=+document.querySelector('#a'+k).value;
+ const read=(axis,side)=>+document.querySelector(`#${axis}${k}${side}`).value;
+ const hMin=read('h','min'),hMax=read('h','max');
+ const sMin=read('s','min'),sMax=read('s','max');
+ const vMin=read('v','min'),vMax=read('v','max');
  const data=img.data,mask=new Uint8Array(640*480);
  for(let p=0,j=0;p<mask.length;p++,j+=4){
-  const v=hsv(data[j],data[j+1],data[j+2]);
-  if(hd(v[0],m.h)<=tol&&Math.abs(v[1]-m.s)<=Math.max(35,tol*2)&&Math.abs(v[2]-m.v)<=Math.max(35,tol*2))mask[p]=1;
+  const px=hsv(data[j],data[j+1],data[j+2]);
+  // If H min > H max, the accepted hue interval wraps through 0 degrees.
+  const hueOK=hMin<=hMax ? (px[0]>=hMin&&px[0]<=hMax) : (px[0]>=hMin||px[0]<=hMax);
+  if(hueOK&&px[1]>=sMin&&px[1]<=sMax&&px[2]>=vMin&&px[2]<=vMax)mask[p]=1;
  }
  return components(mask,minArea);
 }
@@ -118,7 +152,9 @@ function render(){
  raf=requestAnimationFrame(render);
 }
 async function refreshCameras(){
- try{const ds=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+ try{
+    const ds=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    console.log('ds',await navigator.mediaDevices.enumerateDevices());
   const old=camSelect.value;camSelect.innerHTML='';
   ds.forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||`Camera ${i+1}`;camSelect.appendChild(o);});
   if(old&&ds.some(d=>d.deviceId===old))camSelect.value=old;
@@ -148,7 +184,7 @@ canvas.addEventListener('click',e=>{
 document.querySelector('#pick1').onclick=()=>{selected=1;status.textContent='Click marker 1 in the image';};
 document.querySelector('#pick2').onclick=()=>{selected=2;status.textContent='Click marker 2 in the image';};
 document.querySelector('#clear').onclick=()=>{markers.forEach((m,i)=>{m.rgb=null;document.querySelector('#sw'+(i+1)).style.background='transparent';document.querySelector('#r'+(i+1)).textContent='Not calibrated';});status.textContent='Calibration cleared';};
-['t1','t2','a1','a2'].forEach(id=>document.querySelector('#'+id).oninput=e=>document.querySelector('#'+id+'o').value=e.target.value);
+['a1','a2'].forEach(id=>document.querySelector('#'+id).oninput=e=>document.querySelector('#'+id+'o').value=e.target.value);
 document.querySelector('#start').onclick=start;document.querySelector('#stop').onclick=stop;
 camSelect.onchange=()=>{if(stream)start();};window.addEventListener('beforeunload',stop);refreshCameras();
 })();
